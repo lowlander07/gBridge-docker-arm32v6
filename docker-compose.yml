@@ -1,0 +1,107 @@
+version: '3'
+
+services:
+   mqtt:
+      image: eclipse-mosquitto
+      restart: always
+      ports:
+         - '1883:1883'
+
+   database:
+      image: yobasystems/alpine-mariadb
+      #image: mariadb
+      restart: always
+      environment:
+         MYSQL_RANDOM_ROOT_PASSWORD: 'true'
+         MYSQL_ROOT_PASSWORD: r7dv6fn9r99
+         MYSQL_DATABASE: gbridge_db
+         MYSQL_USER: gbridge_db
+         MYSQL_PASSWORD: r7dv6fn9r99
+      expose:
+         - '3306'
+      volumes:
+         - ./database:/var/lib/mysql
+
+   redis:
+      #image: 'arm32v6/redis:4-alpine'
+      #image: redis:4
+      image: redis
+      restart: always
+      expose:
+         - '6379'
+
+   redis-worker:
+      image: 'pkap/gbridge-redis-worker:arm32v6-latest'
+      #image: 'pkap/gbridge-redis-worker'
+      restart: always
+      environment:
+         GBRIDGE_REDISWORKER_REDIS: 'redis://redis:6379'
+         GBRIDGE_REDISWORKER_MQTT: 'mqtt://192.168.1.6:1883'
+         GBRIDGE_REDISWORKER_MQTTUSER: ""
+         GBRIDGE_REDISWORKER_MQTTPASSWORD: ""
+         GBRIDGE_REDISWORKER_HOMEGRAPHKEY: ${HOMEGRAPHKEY}
+      depends_on:
+         - mqtt
+         - redis
+      #volumes:
+      #   - ./gbridge-src/redis-worker/index.js:/usr/src/gbridge-redis-worker/index.js
+
+   fpm:
+      image: bb/fpm
+      build:
+         context: .
+         dockerfile: ./docker-web-fpm/Dockerfile
+      restart: always
+      #volumes:
+         # Next lines are used for test/debug purposes
+         #- /home/bert/dev/gBridge-docker-arm32v6/gbridge-src/web/app:/var/www/app
+         #- /home/bert/dev/docker/gBridge-docker/gbridge-src/web/database:/var/www/database
+      environment:
+         APP_ENV: production
+         APP_KEY: ${FPM_APP_KEY}
+         APP_DEBUG: 'false'
+         APP_LOG_LEVEL: warning
+         APP_URL: 'http://localhost'
+         DB_CONNECTION: mysql
+         DB_HOST: database
+         DB_PORT: 3306
+         DB_DATABASE: gbridge_db
+         DB_USERNAME: gbridge_db
+         DB_PASSWORD: r7dv6fn9r99
+         BROADCAST_DRIVER: log
+         CACHE_DRIVER: file
+         SESSION_DRIVER: file
+         SESSION_LIFETIME: 120
+         QUEUE_DRIVER: sync
+         REDIS_HOST: redis
+         REDIS_PASSWORD: 'null'
+         REDIS_PORT: '6379'
+         GOOGLE_CLIENTID: ${CLIENTID}
+         GOOGLE_CLIENT_SECRET: ${CLIENT_SECRET}
+         GOOGLE_PROJECTID: ${PROJECTID}
+      depends_on:
+         - database
+         - redis
+
+   nginx:
+      image: pkap/gbridge-web-nginx:arm32v6-latest
+      restart: always
+      ports:
+         - '80:80'
+         - '443:443'
+      volumes:
+         #- /home/bert/dev/gBridge-docker-arm32v6/gbridge-src/web/app:/var/www/app
+         - ./docker-web-nginx:/etc/nginx/conf.d
+         - ./certbot/conf:/etc/letsencrypt
+         - ./certbot/www:/var/www/certbot
+      depends_on:
+         - fpm
+      command: "/bin/sh -c 'while :; do sleep 6h & wait $${!}; nginx -s reload; done & nginx -g \"daemon off;\"'"
+
+   certbot:
+      image: certbot/certbot:arm32v6-latest
+      volumes:
+         - ./certbot/conf:/etc/letsencrypt
+         - ./certbot/www:/var/www/certbot
+      entrypoint: "/bin/sh -c 'trap exit TERM; while :; do certbot renew; sleep 12h & wait $${!}; done;'"
+
